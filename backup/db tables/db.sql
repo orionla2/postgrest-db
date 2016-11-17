@@ -1,3 +1,12 @@
+create table if not exists
+auth.tokens (
+  token       uuid primary key,
+  token_type  token_type_enum not null,
+  email       text not null references my_yacht.user (email)
+                on delete cascade on update cascade,
+  created_at  timestamptz not null default current_date
+);
+
 CREATE TABLE my_yacht.additional
 (
   id serial NOT NULL,
@@ -166,7 +175,7 @@ WITH (
 ALTER TABLE my_yacht.payment
   OWNER TO postgres;
 
-  CREATE TABLE my_yacht."user"
+CREATE TABLE my_yacht."user"
 (
   id serial NOT NULL,
   firstname character varying(80),
@@ -174,9 +183,12 @@ ALTER TABLE my_yacht.payment
   email character varying(255) NOT NULL,
   mobile character varying(16) NOT NULL,
   password character varying(45) NOT NULL,
-  "group" character varying(45) NOT NULL,
+  role character varying(45) NOT NULL,
   discount numeric(2,2) DEFAULT 0,
-  CONSTRAINT pk_id_yacht PRIMARY KEY (id)
+  CONSTRAINT pk_id_yacht PRIMARY KEY (id),
+  CONSTRAINT unq_email UNIQUE (email),
+  CONSTRAINT chk_email CHECK (email::text ~* '^.+@.+\..+$'::text),
+  CONSTRAINT chk_pass CHECK (length(password::text) < 46)
 )
 WITH (
   OIDS=FALSE
@@ -230,9 +242,9 @@ begin
 end
 $$;
 
-drop trigger if exists ensure_user_role_exists on auth.users;
+drop trigger if exists ensure_user_role_exists on my_yacht.user;
 create constraint trigger ensure_user_role_exists
-  after insert or update on auth.users
+  after insert or update on my_yacht.user
   for each row
   execute procedure auth.check_role_exists();
 
@@ -241,30 +253,30 @@ auth.encrypt_pass() returns trigger
   language plpgsql
   as $$
 begin
-  if tg_op = 'INSERT' or new.pass <> old.pass then
-    new.pass = crypt(new.pass, gen_salt('bf'));
+  if tg_op = 'INSERT' or new.password <> old.password then
+    new.password = crypt(new.password, gen_salt('bf'));
   end if;
   return new;
 end
 $$;
 
-drop trigger if exists encrypt_pass on auth.users;
+drop trigger if exists encrypt_pass on my_yacht.user;
 create trigger encrypt_pass
-  before insert or update on auth.users
+  before insert or update on my_yacht.user
   for each row
   execute procedure auth.encrypt_pass();
 
 
 create or replace function
-auth.user_role(email text, pass text) returns name
+auth.user_role(ch_email text, password text) returns name
   language plpgsql
   as $$
+declare
+ _role text;
 begin
-  return (
-  select role from auth.users
-   where users.email = user_role.email
-     and users.pass = crypt(user_role.pass, users.pass)
-  );
+  select role from my_yacht.user as u
+    where u.email = user_role.ch_email and u.password = crypt(user_role.password, u.password) into _role;
+  return _role;
 end;
 $$;
 
@@ -306,7 +318,7 @@ end;
 $$;
 
 create or replace function
-my_yacht.reset_password(email text, token uuid, pass text)
+my_yacht.reset_password(email text, token uuid, password text)
   returns void
   language plpgsql
   as $$
@@ -317,7 +329,7 @@ begin
              where tokens.email = reset_password.email
                and tokens.token = reset_password.token
                and token_type = 'reset') then
-    update auth.users set pass=reset_password.pass
+    update my_yacht.users set password=reset_password.password
      where users.email = reset_password.email;
 
     delete from auth.tokens
@@ -373,16 +385,18 @@ create trigger send_validation
   execute procedure auth.send_validation();
 
 create or replace view my_yacht.users as
-select actual.role as role,
-       '***'::text as pass,
-       actual.email as email,
-       actual.verified as verified
-from auth.users as actual,
-     (select rolname
-        from pg_authid
-       where pg_has_role(current_user, oid, 'member')
-     ) as member_of
-where actual.role = member_of.rolname;
+ SELECT actual.firstname,
+  actual.lastname,
+  actual.email,
+  actual.mobile,
+  '***'::text AS password,
+  actual.role,
+  actual.discount
+   FROM my_yacht.user actual,
+    ( SELECT pg_authid.rolname
+           FROM pg_authid
+          WHERE pg_has_role("current_user"(), pg_authid.oid, 'member'::text)) member_of
+  WHERE actual.role = member_of.rolname;
 
 create or replace function
 auth.clearance_for_role(u name) returns void as
@@ -411,52 +425,62 @@ begin
   if tg_op = 'INSERT' then
     perform auth.clearance_for_role(new.role);
 
-    insert into auth.users
-      (role, pass, email, verified)
+    insert into my_yacht.user
+      (firstname,lastname,email,mobile,password,role,discount)
     values
-      (new.role, new.pass, new.email,
-      coalesce(new.verified, true));
+      (new.firstname, new.lastname, new.email, new.mobile, new.password, new.role,new.discount);
     return new;
   elsif tg_op = 'UPDATE' then
     -- no need to check clearance for old.role because
     -- an ineligible row would not have been available to update (http 404)
     perform auth.clearance_for_role(new.role);
 
-    update auth.users set
+    update my_yacht.user set
+      firstname  = new.firstname,
+      lastname  = new.lastname,
       email  = new.email,
+      mobile   = new.mobile,
+      password   = new.password,
       role   = new.role,
-      pass   = new.pass,
-      verified = coalesce(new.verified, old.verified, false)
+      discount   = new.discount
       where email = old.email;
     return new;
   elsif tg_op = 'DELETE' then
     -- no need to check clearance for old.role (see previous case)
 
-    delete from auth.users
-     where auth.email = old.email;
+    delete from my_yacht.user
+     where email = old.email;
     return null;
   end if;
 end
 $$;
 
-drop trigger if exists my_yacht.update_users on my_yacht.user;
-create trigger my_yacht.update_users
-  instead of insert or update or delete on
-    my_yacht.users for each row execute procedure my_yacht.update_users();
+drop trigger if exists update_users on my_yacht.users;
+create trigger update_users
+  instead of insert or update or delete on my_yacht.users
+    for each row execute procedure my_yacht.update_users();
 
 create or replace function
-my_yacht.signup(email text, pass text) returns void
+my_yacht.signup(firstname text, lastname text, email text, mobile text, password text) returns void
 as $$
-  insert into auth.users (email, pass, role) values
-    (signup.email, signup.pass, 'user_role');
+  insert into my_yacht.users (firstname, lastname, email, mobile, password,role, discount) values
+    (signup.firstname, signup.lastname, signup.email, signup.mobile, signup.password, 'user_role', '0');
 $$ language sql;
-
-
+--/////////////////////////////////////////////////////////////////////////////////////////
+create or replace function
+auth.user_auto_verify(email text) returns void
+language plpgsql
+as$$
+begin
+ UPDATE auth.users SET users.verify=true WHERE user.email=email
+end
+$$;
+--/////////////////////////////////////////////////////////////////////////////////////////
 drop type if exists auth.jwt_claims cascade;
-create type auth.jwt_claims AS (role text, email text, exp integer);
+create type auth.jwt_claims AS (role text, email text, exp integer, login text);
 
 create or replace function
-my_yacht.login(email text, pass text) returns auth.jwt_claims
+my_yacht.login(email text, password text) returns auth.jwt_claims
   language plpgsql
   as $$
 declare
@@ -466,17 +490,19 @@ declare
   result auth.jwt_claims;
 begin
   -- check email and password
-  select auth.user_role(email, pass) into _role;
+
+  select auth.user_role(login.email, login.password) into _role;
   if _role is null then
     raise invalid_password using message = 'invalid user or password';
   end if;
+  
   -- check verified flag whether users
   -- have validated their emails
-  _email := email;
-  select verified from auth.users as u where u.email=_email limit 1 into _verified;
-  if not _verified then
-    raise invalid_authorization_specification using message = 'user is not verified';
-  end if;
+  _email := login.email;
+  --select email from my_yacht.user as u where u.email=login.email limit 1 into _verified;
+  --if not _verified then
+  --  raise invalid_authorization_specification using message = 'user is not verified';
+  --end if;
   select _role as role, login.email as email,
          extract(epoch from now())::integer + 60*60 as exp
     into result;
