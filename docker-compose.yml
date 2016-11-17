@@ -44,6 +44,7 @@ services:
          - "POSTGRES_DB=postgres"
      volumes:
          - ./srv/docker/postgresql:/var/lib/postgresql
+         - ./srv/docker/db_backup:/home
     postgrest_test:
      build: .
      container_name: postgrest_test
