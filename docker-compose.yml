@@ -45,22 +45,39 @@ services:
      volumes:
          - ./srv/docker/postgresql/data:/var/lib/postgresql/data
          - ./schema:/home/postgres/schema
+#    schema_setup:
+#        build: ./schema
+#        environment:
+#         - "POSTGRES_USER=postgres"
+#         - "POSTGRES_PASSWORD=1q2w3e4r"
+#         - "POSTGRES_DB=postgres"
+#         - "PGHOST=target_service"
+#         - "PGPASSWORD=1q2w3e4r"
+#        links:
+#         - postgresql_test:target_service
+#        volumes:
+#         - ./schema:/schema
+#        depends_on:
+#         - postgresql_test
+        #command: ./wfi/wait-for-it.sh target_service:5432 -s -t 600  -- ./create_schema.sh my_yacht db.sql 
+#        command: /schema/start.sh
     schema_setup:
-        build: ./schema
+        build: ./migration
         environment:
          - "POSTGRES_USER=postgres"
          - "POSTGRES_PASSWORD=1q2w3e4r"
          - "POSTGRES_DB=postgres"
          - "PGHOST=target_service"
          - "PGPASSWORD=1q2w3e4r"
+         - "SQITCH_BUNDLE_REPO=https://github.com/anddorua/ymigration.git"
         links:
          - postgresql_test:target_service
         volumes:
-         - ./schema:/schema
+         - ./migration/src:/src
         depends_on:
          - postgresql_test
         #command: ./wfi/wait-for-it.sh target_service:5432 -s -t 600  -- ./create_schema.sh my_yacht db.sql 
-        command: /schema/start.sh
+        command: /src/start.sh
     postgrest_test:
      build: .
      container_name: postgrest_test
