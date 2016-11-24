@@ -1,0 +1,9 @@
+[submodule "migration/src/dev"]
+	path = migration/src/dev
+	url = https://github.com/anddorua/ymigration.git
+[submodule "migration/src/ym-dev"]
+	path = migration/src/ym-dev
+	url = https://github.com/anddorua/ymigration.git
+[submodule "ymigration"]
+	path = ymigration
+	url = https://github.com/anddorua/ymigration.git
