@@ -47,6 +47,7 @@ services:
          - ./srv/docker/db_backup:/home
     schema_setup:
         build: ./migration
+        image: postgrestdb_schema_setup
         environment:
          - "POSTGRES_USER=postgres"
          - "POSTGRES_PASSWORD=1q2w3e4r"
