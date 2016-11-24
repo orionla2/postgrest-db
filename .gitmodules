@@ -1,0 +1,3 @@
+[submodule "migration/dev/bundle"]
+	path = migration/dev/bundle
+	url = https://github.com/anddorua/ymigration.git
